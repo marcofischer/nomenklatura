@@ -11,15 +11,15 @@ from nomenklatura.loader import Loader
 
 TYPE_WEIGHTS = {
     registry.name: 3.0,
-    registry.country: 1.5,
+    registry.country: 1.0,
     registry.date: 1.5,
     registry.language: 0.7,
     registry.iban: 3.0,
     registry.phone: 3.0,
     registry.email: 3.0,
     registry.entity: 0.0,
-    registry.topic: 2.1,
-    registry.address: 2.5,
+    # registry.topic: 0.0,
+    # registry.address: 2.5,
     registry.identifier: 2.5,
 }
 SKIP_FULL = (
@@ -41,14 +41,14 @@ class Tokenizer(Generic[DS, E]):
         return f"s:{schema.name}"
 
     def value(
-        self, type: PropertyType, value: str, fuzzy: bool = True
+        self, type: PropertyType, value: str, fuzzy: bool = True, max_len: int = 100
     ) -> Generator[Tuple[str, float], None, None]:
         """Perform type-specific token generation for a property value."""
         if type in (registry.url, registry.topic, registry.entity):
             return
         weight = TYPE_WEIGHTS.get(type, 1.0)
         if type not in SKIP_FULL:
-            token_value = value[:100].lower()
+            token_value = value[:max_len].lower()
             token = f"{type.name[:2]}:{token_value}"
             yield token, weight
         if type == registry.date and len(value) > 4:
@@ -58,13 +58,13 @@ class Tokenizer(Generic[DS, E]):
             if norm is None:
                 return
             for token in norm.split(WS):
-                yield f"w:{token}", weight
+                yield f"w:{token}", 0.5
                 if type == registry.name:
                     yield f"na:{token}", weight
 
-                if fuzzy:
-                    for ngram in split_ngrams(token, 3, 4):
-                        yield f"w:{ngram}", 0.5
+                if fuzzy and False:
+                    for ngram in split_ngrams(token, 2, 3):
+                        yield f"g:{ngram}", 0.1
 
     def entity(
         self,
@@ -76,6 +76,7 @@ class Tokenizer(Generic[DS, E]):
         yield self.schema_token(entity.schema), 0.0
         for prop, value in entity.itervalues():
             for token, weight in self.value(prop.type, value, fuzzy=fuzzy):
+                # print("TOK", token, weight)
                 yield token, weight
         if loader is not None:
             # Index Address, Identification, Sanction, etc.:
@@ -85,4 +86,4 @@ class Tokenizer(Generic[DS, E]):
                     if prop.type == registry.date:
                         continue
                     for token, weight in self.value(prop.type, value, fuzzy=fuzzy):
-                        yield token, weight * 0.8
+                        yield token, weight * 0.5

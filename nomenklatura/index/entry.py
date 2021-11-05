@@ -14,26 +14,32 @@ class IndexEntry(Generic[DS, E]):
 
     def __init__(self) -> None:
         self.idf: float = 0.0
-        self.entities: Dict[str, float] = dict()
+        self.entities: Dict[str, int] = dict()
 
     def add(self, entity_id: str, weight: float = 1.0) -> None:
         """Mark the given entity as relevant to the entry's token."""
         # This is insane and meant to trade perf for memory:
         if entity_id not in self.entities:
             self.entities[entity_id] = 0
-        self.entities[entity_id] += weight
+        self.entities[entity_id] += 1
 
     def compute(self, index: "Index[DS, E]") -> None:
         """Compute weighted term frequency for scoring."""
-        self.idf = math.log(len(index) / len(self))
+        index_entities = float(len(index.terms))
+        entities = len(self.entities)
+        idf = ((index_entities - entities) + 0.5) / (entities + 0.5)
+        self.idf = math.log(1 + idf)
 
     def frequencies(
         self, index: "Index[DS, E]"
     ) -> Generator[Tuple[str, float], None, None]:
-        for entity_id, weight in self.entities.items():
+        for entity_id, count in self.entities.items():
+            if count == 0:
+                continue
             terms = index.terms.get(entity_id, 0.0)
-            tf = weight / max(terms, index.min_terms)
-            yield entity_id, tf
+            tf = count / max(terms, index.min_terms)
+            # tf = 1 + math.log(tf)
+            yield entity_id, tf * self.idf
 
     def __repr__(self) -> str:
         return "<IndexEntry(%r)>" % len(self)

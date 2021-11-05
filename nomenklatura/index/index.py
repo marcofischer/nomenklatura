@@ -1,3 +1,4 @@
+import math
 import pickle
 import logging
 import statistics
@@ -19,26 +20,26 @@ log = logging.getLogger(__name__)
 class Index(Generic[DS, E]):
     """An in-memory search index to match entities against a given dataset."""
 
-    __slots__ = "loader", "inverted", "tokenizer", "terms", "min_terms"
+    # __slots__ = "loader", "inverted", "tokenizer", "terms", "min_terms"
 
     def __init__(self, loader: Loader[DS, E]):
         self.loader = loader
         self.tokenizer = Tokenizer[DS, E]()
         self.inverted: Dict[str, IndexEntry[DS, E]] = {}
-        self.terms: Dict[str, float] = {}
+        self.terms: Dict[str, int] = {}
 
     def index(self, entity: E, adjacent: bool = True, fuzzy: bool = True) -> None:
         """Index one entity. This is not idempotent, you need to remove the
         entity before re-indexing it."""
         if not entity.schema.matchable:
             return
-        terms = 0.0
+        terms = 0
         loader = self.loader if adjacent else None
         for token, weight in self.tokenizer.entity(entity, loader=loader, fuzzy=fuzzy):
             if token not in self.inverted:
                 self.inverted[token] = IndexEntry()
             self.inverted[token].add(entity.id, weight=weight)
-            terms += weight
+            terms += 1
         self.terms[entity.id] = terms
         log.debug("Index entity: %r (%d terms)", entity, terms)
 
@@ -53,8 +54,10 @@ class Index(Generic[DS, E]):
         log.info("Built index: %r", self)
 
     def commit(self) -> None:
-        quantiles = statistics.quantiles(self.terms.values(), n=3)
-        self.min_terms = float(quantiles[0])
+        # quantiles = statistics.quantiles(self.terms.values(), n=5)
+        # self.min_terms = float(quantiles[0])
+        self.min_terms = 1.0
+        self.avg_terms = sum(self.terms.values()) / max(1, len(self.terms))
 
         for entry in self.inverted.values():
             entry.compute(self)
@@ -75,17 +78,46 @@ class Index(Generic[DS, E]):
         self, query: E, limit: Optional[int] = 30, fuzzy: bool = True
     ) -> Generator[Tuple[str, float], None, None]:
         """Find entities similar to the given input entity, return ID."""
-        tokens: Dict[str, float] = defaultdict(float)
-        for token, _ in self.tokenizer.entity(query, fuzzy=fuzzy):
-            tokens[token] += 1
+
+        weights: Dict[str, float] = {}
+        counts: Dict[str, float] = {}
+        for token, weight in self.tokenizer.entity(query, fuzzy=fuzzy):
+            if token not in counts:
+                weights[token] = weight
+                counts[token] = 1
+            else:
+                counts[token] += 1
+        total_weight = sum(counts.values())
 
         matches: Dict[str, float] = defaultdict(float)
-        for token, _ in tokens.items():
+        for token, weight in counts.items():
             entry = self.inverted.get(token)
             if entry is None or entry.idf is None:
+                # print("SKIP", token, entry)
                 continue
-            for entity_id, tf in entry.frequencies(self):
-                matches[entity_id] += tf * entry.idf
+            # for entity_id, score in entry.frequencies(self):
+            #     matches[entity_id] += score
+            weighted = 1 + (weight / total_weight)
+            # print(
+            #     "TOK",
+            #     token,
+            #     "IDF",
+            #     entry.idf,
+            #     "DOCS",
+            #     len(entry.entities),
+            #     "WEIGHT",
+            #     weight,
+            #     "/",
+            #     total_weight,
+            #     "WEIGHTED",
+            #     weighted,
+            # )
+            for entity_id, count in entry.entities.items():
+                terms = self.terms.get(entity_id, 0.0)
+                tf = math.log(count / max(terms, 1))
+                print("TF", tf, count, terms, count / terms)
+                score = tf * entry.idf
+                matches[entity_id] += score
 
         results = sorted(matches.items(), key=lambda x: x[1], reverse=True)
         log.debug("Match entity: %r (%d results)", query, len(results))
